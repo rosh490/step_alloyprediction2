@@ -1,46 +1,37 @@
 """
-HPDC COST ENGINE — Excel-Matching Logic (FINAL)
+HPDC COST ENGINE — Correct Surface Area Handling (Final)
 
-This model is intentionally aligned with Excel / plant reality.
-It does NOT try to derive cost from CAD solid volume.
-
-Key idea:
-Excel weight ≈ bounding box shell weight
+Key rules:
+- CAD surface area must remain untouched
+- Reduced surface area used only for costing
 """
 
 from typing import Dict
 
 # ---------------------------------------------------
-# Alloy densities (g/cm³)
+# Alloy reference densities (g/cm³)
 # ---------------------------------------------------
 ALLOY_DENSITY = {
     "Aluminum_A380": 2.70,
     "Aluminum_ADC12": 2.70,
     "Aluminum_A356": 2.68,
+    "Zinc_ZD3": 6.60,
+    "Magnesium_AZ91D": 1.81,
 }
 
 # ---------------------------------------------------
-# EXCEL-STYLE ASSUMPTIONS
+# Calibration factors
 # ---------------------------------------------------
-
-# Typical HPDC aluminum housing wall thickness (mm)
-ASSUMED_WALL_THICKNESS_MM = 2.8
-
-# Grossing factor (runner + overflow)
+CASTING_UTILIZATION_FACTOR = 0.40     # Excel net weight
 GROSS_WEIGHT_FACTOR = 1.10
-
-# Projected area utilization (press effective)
 PROJECTED_AREA_UTILIZATION = 0.48
 
-# Surface area utilization (costing only)
+# IMPORTANT: Surface utilization ONLY for costing
 SURFACE_AREA_UTILIZATION = 0.82
 
 
-# ===================================================
-# GEOMETRY → EXCEL STYLE COSTING
-# ===================================================
 def derive_costing_geometry(
-    cad_volume_mm3: float,           # kept only for reference
+    cad_volume_mm3: float,
     cad_surface_area_mm2: float,
     dx: float,
     dy: float,
@@ -50,58 +41,40 @@ def derive_costing_geometry(
 
     density = ALLOY_DENSITY.get(alloy, 2.7)
 
-    # ------------------------------------------------
-    # 1. CAD SOLID WEIGHT (REFERENCE ONLY)
-    # ------------------------------------------------
+    # 1. CAD solid weight (reference)
     cad_weight_kg = (cad_volume_mm3 / 1e6) * density
 
-    # ------------------------------------------------
-    # 2. EXCEL NET WEIGHT (KEY FIX ✅)
-    # ------------------------------------------------
-    # Envelope volume × shell thickness
-    envelope_volume_mm3 = 2 * (
-        dx * dy + dy * dz + dx * dz
-    ) * ASSUMED_WALL_THICKNESS_MM
-
-    net_weight_kg = (envelope_volume_mm3 / 1e6) * density
-
-    # ------------------------------------------------
-    # 3. GROSS WEIGHT
-    # ------------------------------------------------
+    # 2. Excel-style weights
+    net_weight_kg = cad_weight_kg * CASTING_UTILIZATION_FACTOR
     gross_weight_kg = net_weight_kg * GROSS_WEIGHT_FACTOR
 
-    # ------------------------------------------------
-    # 4. PROJECTED AREA
-    # ------------------------------------------------
-    envelope_projected_area_mm2 = dx * dy
+    # 3. Projected area
+    cad_projected_area_mm2 = dx * dy
     effective_projected_area_mm2 = (
-        envelope_projected_area_mm2 * PROJECTED_AREA_UTILIZATION
+        cad_projected_area_mm2 * PROJECTED_AREA_UTILIZATION
     )
 
-    # ------------------------------------------------
-    # 5. SURFACE AREAS
-    # ------------------------------------------------
-    real_surface_area_mm2 = cad_surface_area_mm2
-    effective_surface_area_mm2 = cad_surface_area_mm2 * SURFACE_AREA_UTILIZATION
+    # ✅ 4. SURFACE AREAS (THIS IS THE FIX)
+    real_surface_area_mm2 = cad_surface_area_mm2   # EXACT CAD
+    effective_surface_area_mm2 = (
+        cad_surface_area_mm2 * SURFACE_AREA_UTILIZATION
+    )
 
     return {
-        # Reference
-        "cad_weight_kg": round(cad_weight_kg, 3),
-
-        # ✅ Excel-style weights
-        "net_weight_kg": round(net_weight_kg, 3),
-        "gross_weight_kg": round(gross_weight_kg, 3),
-
-        # ✅ Areas
+        # ✅ REAL GEOMETRY (for display / validation)
         "real_surface_area_mm2": round(real_surface_area_mm2, 2),
+
+        # ✅ EFFECTIVE GEOMETRY (for costing only)
         "effective_surface_area_mm2": round(effective_surface_area_mm2, 2),
         "effective_projected_area_mm2": round(effective_projected_area_mm2, 2),
+
+        # ✅ WEIGHTS
+        "cad_weight_kg": round(cad_weight_kg, 3),
+        "net_weight_kg": round(net_weight_kg, 3),
+        "gross_weight_kg": round(gross_weight_kg, 3),
     }
 
 
-# ===================================================
-# FINAL COST (NORMAL / PLANT)
-# ===================================================
 def calculate_hpdc_cost(
     cad_traits: Dict,
     alloy: str,
@@ -119,6 +92,7 @@ def calculate_hpdc_cost(
         alloy=alloy,
     )
 
+    # Cost uses ONLY effective geometry
     material_cost = geom["gross_weight_kg"] * material_price_per_kg
     press_cost = geom["effective_projected_area_mm2"] * press_cost_per_mm2
     conversion_cost = geom["net_weight_kg"] * conversion_cost_per_kg
